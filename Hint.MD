@@ -7,7 +7,7 @@
 # 桥接传感器数据，IMU从Gazebo到ROS2，还有lidar数据
 - ros2 run ros_gz_bridge parameter_bridge imu@sensor_msgs/msg/Imu[gz.msgs.IMU
 
-- ros2 run ros_gz_bridge parameter_bridge /lidar/points@sensor_msgs/msg/PointCloud2[gz.msgs.PointCloudPacked
+- ros2 run ros_gz_bridge parameter_bridge /lidar/points@sensor_msgs/msg/PointCloud2[gz.msgs.PointCloudPacked imu@sensor_msgs/msg/Imu[gz.msgs.IMU
 
 # 测试发布静态数据变换
 - ros2 run tf2_ros static_transform_publisher 0.8 0 0.5 0 0 0 world "vehicle_blue/chassis/gpu_lidar"

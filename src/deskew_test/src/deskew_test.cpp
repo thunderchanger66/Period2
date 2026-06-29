@@ -250,6 +250,8 @@ private:
         double imu_start = imu_buffer_.front().t;
         double imu_end = imu_buffer_.back().t;
 
+        // RCLCPP_INFO(get_logger(), "IMU buffer from %.6f to %.6f", imu_start, imu_end);
+
         return imu_start <= t_start && imu_end >= t_end;
     }
 
