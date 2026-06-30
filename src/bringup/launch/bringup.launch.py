@@ -10,6 +10,7 @@ def generate_launch_description():
             package='ros_gz_bridge',
             executable='parameter_bridge',
             arguments=[
+                '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
                 '/lidar/points@sensor_msgs/msg/PointCloud2[gz.msgs.PointCloudPacked',
                 '/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
                 '/model/vehicle_blue/pose@geometry_msgs/msg/PoseStamped[gz.msgs.Pose'
@@ -24,7 +25,8 @@ def generate_launch_description():
             executable='tf_broadcaster',
             parameters=[
                 {'use_sim_time': True},
-                {'odom_frame': 'odom'},
+                {'pose_topic': '/model/vehicle_blue/pose'},
+                {'odom_frame': 'world'},
                 {'base_frame': 'vehicle_blue/chassis'}
             ],
             output='screen'
