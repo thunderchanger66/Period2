@@ -8,7 +8,7 @@ class TFBroadcaster : public rclcpp::Node
 public:
     TFBroadcaster() : Node("tf_broadcaster") {
          // 声明参数：固定坐标系和子坐标系名称
-        this->declare_parameter<std::string>("odom_frame", "odom");
+        this->declare_parameter<std::string>("odom_frame", "world");
         this->declare_parameter<std::string>("base_frame", "vehicle_blue/chassis");
         this->declare_parameter<std::string>("pose_topic", "/model/vehicle_blue/pose");
 

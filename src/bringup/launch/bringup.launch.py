@@ -36,7 +36,7 @@ def generate_launch_description():
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['0.8', '0', '0.5', '0', '0', '0', 'vehicle_blue/chassis', 'vehicle_blue/chassis/gpu_lidar'],
+            arguments=['1.3', '0', '0.9', '0', '0', '0', 'vehicle_blue/chassis', 'vehicle_blue/chassis/gpu_lidar'],
             parameters=[{'use_sim_time': True}],
         ),
     ])

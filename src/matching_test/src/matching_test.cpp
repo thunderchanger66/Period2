@@ -207,7 +207,8 @@ void MatchingNode::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr 
     *two_frame_map += *cloud_curr_aligned;
     sensor_msgs::msg::PointCloud2 out_msg;
     pcl::toROSMsg(*two_frame_map, out_msg);
-    out_msg.header = msg->header;
+    //out_msg.header = msg->header;
+    out_msg.header = last_header_;
     pub_->publish(out_msg);
 
     // pcl::io::savePCDFileBinary(save_dir_ + "/frame_curr_down.pcd", *cloud_curr);
