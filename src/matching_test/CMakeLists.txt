@@ -16,9 +16,13 @@ find_package(Eigen3 REQUIRED)
 add_executable(matching_test src/matching_test.cpp)
 ament_target_dependencies(matching_test rclcpp sensor_msgs pcl_conversions)
 
-target_link_libraries(matching_test ${PCL_LIBRARIES} Eigen3::Eigen)
+add_executable(matching src/matching.cpp)
+ament_target_dependencies(matching rclcpp sensor_msgs pcl_conversions)
 
-install(TARGETS matching_test DESTINATION lib/${PROJECT_NAME})
+target_link_libraries(matching_test ${PCL_LIBRARIES} Eigen3::Eigen)
+target_link_libraries(matching ${PCL_LIBRARIES} Eigen3::Eigen)
+
+install(TARGETS matching_test matching DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
