@@ -181,23 +181,18 @@ private:
         frame_count_++;
 
         if (process_every_n_ > 1 && frame_count_ % process_every_n_ != 0)
-        {
             return;
-        }
 
         CloudT::Ptr cloud_raw(new CloudT);
         pcl::fromROSMsg(*msg, *cloud_raw);
 
-        if (cloud_raw->empty())
-        {
+        if (cloud_raw->empty()) {
             RCLCPP_WARN(get_logger(), "Received empty cloud.");
             return;
         }
 
         CloudT::Ptr cloud_curr = preprocessCloud(cloud_raw);
-
-        if (cloud_curr->empty())
-        {
+        if (cloud_curr->empty()) {
             RCLCPP_WARN(get_logger(), "Cloud empty after preprocessing.");
             return;
         }
@@ -244,19 +239,17 @@ private:
         icp.setTransformationEpsilon(trans_eps_);
         icp.setEuclideanFitnessEpsilon(fitness_eps_);
 
-        CloudT::Ptr cloud_curr_aligned_to_last(new CloudT);
-        icp.align(*cloud_curr_aligned_to_last);
+        CloudT::Ptr cloud_curr_aligned_to_prev(new CloudT);
+        icp.align(*cloud_curr_aligned_to_prev);
 
-        if (!icp.hasConverged())
-        {
+        if (!icp.hasConverged()) {
             RCLCPP_WARN(get_logger(), "ICP did not converge. Skip this frame.");
             return;
         }
 
         double score = icp.getFitnessScore();
 
-        if (score > max_fitness_score_)
-        {
+        if (score > max_fitness_score_) {
             RCLCPP_WARN(
                 get_logger(),
                 "ICP score too large: %.6f > %.6f. Skip this frame.",
@@ -268,14 +261,13 @@ private:
 
         Eigen::Matrix4f delta_T = icp.getFinalTransformation();
 
-        // 关键：
-        // delta_T 表示 当前帧 LiDAR -> 上一帧 LiDAR
-        // T_map_lidar_ 表示 当前 LiDAR -> map
-        // 所以累积：
-        T_map_lidar_ = T_map_lidar_ * delta_T;
+        // scan-to-scan：当前帧相对上一帧的位姿为 delta_T
+        // 把它累计到共享地图坐标系中，得到当前帧在 map 下的位姿
+        Eigen::Matrix4f T_map_curr = T_map_lidar_ * delta_T;
+        T_map_lidar_ = T_map_curr;
 
         CloudT::Ptr cloud_curr_in_map(new CloudT);
-        pcl::transformPointCloud(*cloud_curr, *cloud_curr_in_map, T_map_lidar_);
+        pcl::transformPointCloud(*cloud_curr, *cloud_curr_in_map, T_map_curr);
 
         *map_cloud_ += *cloud_curr_in_map;
 
@@ -311,7 +303,7 @@ private:
             std::chrono::duration<double, std::milli>(t_end - t_begin).count();
 
         RCLCPP_INFO_THROTTLE(
-            get_logger(),
+            get_logger(), 
             *get_clock(),
             1000,
             "Multi-frame processing cost: %.2f ms",
