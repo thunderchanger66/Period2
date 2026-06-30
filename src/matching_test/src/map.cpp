@@ -1,5 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 
 #include <pcl_conversions/pcl_conversions.h>
 
@@ -14,8 +15,10 @@
 #include <pcl/common/transforms.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/search/kdtree.h>
+#include <pcl/common/io.h>
 
 #include <Eigen/Dense>
+#include <Eigen/Geometry>
 
 #include <filesystem>
 #include <string>
@@ -23,8 +26,8 @@
 #include <cmath>
 #include <chrono>
 #include <deque>
-
-#include <pcl/common/io.h>   // 需要添加该头文件以使用 pcl::copyPointCloud
+#include <mutex>
+#include <algorithm>
 
 class ScanToMapNode : public rclcpp::Node
 {
@@ -37,6 +40,7 @@ public:
     {
         // -------------------- 参数声明 --------------------
         declare_parameter<std::string>("input_topic", "/lidar/points_deskewed");
+        declare_parameter<std::string>("imu_topic", "/imu");
         declare_parameter<std::string>("map_topic", "/scan_to_map_map");
         declare_parameter<std::string>("registered_scan_topic", "/scan_to_map_current_scan");
         declare_parameter<std::string>("map_frame", "map");
@@ -44,25 +48,26 @@ public:
 
         declare_parameter<double>("scan_leaf_size", 0.25);
         declare_parameter<double>("map_leaf_size", 0.25);
-        declare_parameter<double>("local_map_radius", 40.0);
+        declare_parameter<double>("local_map_radius", 30.0);  // 增大以容忍预测偏差
 
-        declare_parameter<double>("max_corr_dist", 1.0);
+        declare_parameter<double>("max_corr_dist", 0.8);
         declare_parameter<int>("max_iter", 30);
         declare_parameter<double>("trans_eps", 1e-6);
         declare_parameter<double>("fitness_eps", 1e-6);
-        declare_parameter<double>("max_fitness_score", 2.0);
+        declare_parameter<double>("max_fitness_score", 1.5);
 
         declare_parameter<int>("process_every_n", 1);
         declare_parameter<int>("publish_every_n", 1);
         declare_parameter<int>("save_every_n", 50);
         declare_parameter<int>("min_target_points", 30);
 
-        // 新增参数
-        declare_parameter<int>("max_map_points", 50000);
-        declare_parameter<bool>("enable_constant_velocity", false);
+        declare_parameter<int>("max_map_points", 80000);
+        declare_parameter<bool>("enable_constant_velocity_fallback", true);
+        declare_parameter<double>("imu_timeout", 0.2);  // 秒
 
         // 读取参数
         input_topic_ = get_parameter("input_topic").as_string();
+        imu_topic_ = get_parameter("imu_topic").as_string();
         map_topic_ = get_parameter("map_topic").as_string();
         registered_scan_topic_ = get_parameter("registered_scan_topic").as_string();
         map_frame_ = get_parameter("map_frame").as_string();
@@ -84,23 +89,32 @@ public:
         min_target_points_ = get_parameter("min_target_points").as_int();
 
         max_map_points_ = get_parameter("max_map_points").as_int();
-        enable_constant_velocity_ = get_parameter("enable_constant_velocity").as_bool();
+        enable_constant_velocity_fallback_ = get_parameter("enable_constant_velocity_fallback").as_bool();
+        imu_timeout_ = get_parameter("imu_timeout").as_double();
 
         std::filesystem::create_directories(save_dir_);
 
         auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
 
+        // 雷达订阅
         cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
             input_topic_,
             qos,
             std::bind(&ScanToMapNode::cloudCallback, this, std::placeholders::_1)
         );
 
+        // IMU 订阅
+        imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
+            imu_topic_,
+            rclcpp::SensorDataQoS(),
+            std::bind(&ScanToMapNode::imuCallback, this, std::placeholders::_1)
+        );
+
+        // 发布者
         map_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
             map_topic_,
             qos
         );
-
         registered_scan_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
             registered_scan_topic_,
             qos
@@ -112,19 +126,76 @@ public:
 
         RCLCPP_INFO(get_logger(), "Scan-to-map node started.");
         RCLCPP_INFO(get_logger(), "Input: %s", input_topic_.c_str());
+        RCLCPP_INFO(get_logger(), "IMU topic: %s", imu_topic_.c_str());
         RCLCPP_INFO(get_logger(), "Map topic: %s", map_topic_.c_str());
         RCLCPP_INFO(get_logger(), "Map frame: %s", map_frame_.c_str());
         RCLCPP_INFO(get_logger(), "Max map points: %d", max_map_points_);
     }
 
 private:
-    // ======================== 工具函数 ========================
+    // ======================== 数据结构 ========================
+    struct ImuData {
+        double t;
+        Eigen::Vector3d gyro;   // 角速度 (rad/s)
+    };
+
+    // ======================== IMU 处理 ========================
+    std::deque<ImuData> imu_buffer_;
+    std::mutex imu_mutex_;
+
+    void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
+    {
+        ImuData data;
+        data.t = rclcpp::Time(msg->header.stamp).seconds();
+        data.gyro << msg->angular_velocity.x,
+                     msg->angular_velocity.y,
+                     msg->angular_velocity.z;
+        std::lock_guard<std::mutex> lock(imu_mutex_);
+        imu_buffer_.push_back(data);
+        if (imu_buffer_.size() > 10000) imu_buffer_.pop_front();
+    }
+
+    // 积分 IMU 数据，返回从 t_start 到 t_end 的 4x4 刚体变换（局部增量）
+    Eigen::Matrix4f integrateImu(double t_start, double t_end)
+    {
+        Eigen::Matrix4f T = Eigen::Matrix4f::Identity();
+        if (t_end <= t_start) return T;
+
+        std::lock_guard<std::mutex> lock(imu_mutex_);
+        if (imu_buffer_.size() < 2) return T;
+
+        // 查找覆盖区间
+        auto it_start = std::lower_bound(imu_buffer_.begin(), imu_buffer_.end(), t_start,
+            [](const ImuData& d, double t) { return d.t < t; });
+        auto it_end = std::upper_bound(it_start, imu_buffer_.end(), t_end,
+            [](double t, const ImuData& d) { return t < d.t; });
+
+        if (it_start == imu_buffer_.end() || it_end == it_start) return T;
+
+        Eigen::Matrix3f R = Eigen::Matrix3f::Identity();
+        for (auto it = it_start; it != it_end; ++it) {
+            auto next = it + 1;
+            if (next == imu_buffer_.end()) break;
+            double dt = next->t - it->t;
+            if (dt <= 0.0 || dt > 0.1) continue;  // 跳过异常间隔
+            Eigen::Vector3f omega = it->gyro.cast<float>();
+            float angle = omega.norm() * dt;
+            if (angle < 1e-6) continue;
+            Eigen::AngleAxisf rot(angle, omega.normalized());
+            R = R * rot.toRotationMatrix();
+        }
+
+        T.block<3,3>(0,0) = R;
+        // 平移增量忽略（只用旋转），因为平移积分漂移太大
+        return T;
+    }
+
+    // ======================== 点云工具 ========================
 
     CloudT::Ptr voxelDownsample(const CloudT::Ptr& cloud_in, double leaf_size)
     {
         CloudT::Ptr cloud_out(new CloudT);
-        if (cloud_in->empty())
-            return cloud_out;
+        if (cloud_in->empty()) return cloud_out;
 
         pcl::VoxelGrid<PointT> voxel;
         voxel.setInputCloud(cloud_in);
@@ -145,46 +216,31 @@ private:
         return voxelDownsample(cloud_no_nan, scan_leaf_size_);
     }
 
-    // ---------- 新的增量式地图更新 ----------
+    // ---------- 增量式地图更新 ----------
     void addCloudToMap(const CloudT::Ptr& cloud_in_map)
     {
-        if (cloud_in_map->empty())
-            return;
-
-        // 1. 新点云降采样（与地图分辨率一致）
+        if (cloud_in_map->empty()) return;
         CloudT::Ptr cloud_down = voxelDownsample(cloud_in_map, map_leaf_size_);
-
-        // 2. 合并
         *map_cloud_ += *cloud_down;
 
-        // 3. 如果地图点太多，触发全局降采样
-        if (static_cast<int>(map_cloud_->size()) > max_map_points_)
-        {
-            RCLCPP_WARN_THROTTLE(
-                get_logger(),
-                *get_clock(),
-                5000,
-                "Map too large (%zu points), global downsample triggered.",
-                map_cloud_->size()
-            );
+        if (static_cast<int>(map_cloud_->size()) > max_map_points_) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                "Map too large (%zu points), global downsample.",
+                map_cloud_->size());
             map_cloud_ = voxelDownsample(map_cloud_, map_leaf_size_);
         }
     }
 
+    // ---------- 局部地图提取（KdTree 半径搜索） ----------
     CloudT::Ptr getLocalMap(const Eigen::Matrix4f& T_predict)
     {
         CloudT::Ptr local_map(new CloudT);
-
-        if (map_cloud_->empty())
-            return local_map;
+        if (map_cloud_->empty()) return local_map;
 
         pcl::search::KdTree<PointT> tree;
         tree.setInputCloud(map_cloud_);
 
-        // 计算当前雷达位置（在 map 坐标系下）
         Eigen::Vector4f center = T_predict * Eigen::Vector4f(0, 0, 0, 1);
-
-        // 构建搜索点
         PointT search_point;
         search_point.x = center[0];
         search_point.y = center[1];
@@ -193,30 +249,21 @@ private:
         std::vector<int> indices;
         std::vector<float> distances;
         int num_found = tree.radiusSearch(search_point,
-                                        static_cast<double>(local_map_radius_),
-                                        indices, distances);
+                                          static_cast<double>(local_map_radius_),
+                                          indices, distances);
 
         if (num_found > 0)
-        {
             pcl::copyPointCloud(*map_cloud_, indices, *local_map);
-        }
 
-        if (static_cast<int>(local_map->size()) < min_target_points_)
-        {
-            RCLCPP_WARN_THROTTLE(
-                get_logger(),
-                *get_clock(),
-                3000,
-                "Local map too small (%zu points), use full map.",
-                local_map->size()
-            );
+        if (static_cast<int>(local_map->size()) < min_target_points_) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 3000,
+                "Local map too small (%zu), use full map.", local_map->size());
             return map_cloud_;
         }
-
         return local_map;
     }
 
-    // ---------- 发布点云 ----------
+    // ---------- 发布 ----------
     void publishCloud(
         const CloudT::Ptr& cloud,
         const rclcpp::Time& stamp,
@@ -229,37 +276,40 @@ private:
         pub->publish(out_msg);
     }
 
-    // ---------- 打印位姿 ----------
+    // ---------- 打印 ----------
     void printPose(double score)
     {
         float x = T_map_lidar_(0, 3);
         float y = T_map_lidar_(1, 3);
         float z = T_map_lidar_(2, 3);
         float yaw = std::atan2(T_map_lidar_(1, 0), T_map_lidar_(0, 0));
-
-        RCLCPP_INFO(
-            get_logger(),
-            "frame: %d | score: %.6f | pose: x %.3f y %.3f z %.3f yaw %.3f | map points: %zu",
-            used_frame_count_,
-            score,
-            x, y, z, yaw,
-            map_cloud_->size()
-        );
+        RCLCPP_INFO(get_logger(),
+            "frame: %d | score: %.6f | pose: x %.3f y %.3f z %.3f yaw %.3f | map: %zu",
+            used_frame_count_, score, x, y, z, yaw, map_cloud_->size());
     }
 
-    // ---------- 恒定速度预测（可选） ----------
-    Eigen::Matrix4f predictPose()
+    // ---------- 位姿预测 ----------
+    Eigen::Matrix4f predictPose(double current_time)
     {
-        if (enable_constant_velocity_ && has_previous_pose_)
-        {
-            // 使用上一帧相对位移作为增量
+        // 首选：IMU 积分
+        if (has_last_cloud_time_) {
+            Eigen::Matrix4f delta = integrateImu(last_cloud_time_, current_time);
+            // 检查 delta 是否非零（即 IMU 数据可用）
+            if (!delta.isIdentity()) {
+                RCLCPP_DEBUG(get_logger(), "Using IMU prediction.");
+                return T_map_lidar_ * delta;   // 上一帧位姿 + IMU 增量
+            }
+        }
+
+        // 后备：常速度模型（若启用）
+        if (enable_constant_velocity_fallback_ && has_previous_pose_) {
             Eigen::Matrix4f delta = last_T_.inverse() * T_map_lidar_;
+            RCLCPP_DEBUG(get_logger(), "Using constant velocity fallback.");
             return T_map_lidar_ * delta;
         }
-        else
-        {
-            return T_map_lidar_;
-        }
+
+        // 最后回退：保持上一帧位姿
+        return T_map_lidar_;
     }
 
     // ======================== 主回调 ========================
@@ -267,74 +317,60 @@ private:
     void cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     {
         auto t_begin = std::chrono::steady_clock::now();
-
         frame_count_++;
 
         if (process_every_n_ > 1 && frame_count_ % process_every_n_ != 0)
-        {
-            // 即使不处理，也更新上次位姿用于预测（但本次不实际移动）
-            // 这里不更新，因为 T_map_lidar_ 代表真实位姿，跳过不应改变它
             return;
-        }
 
-        // 1. 加载并预处理点云
+        // 1. 加载与预处理
         CloudT::Ptr cloud_raw(new CloudT);
         pcl::fromROSMsg(*msg, *cloud_raw);
-        if (cloud_raw->empty())
-        {
-            RCLCPP_WARN(get_logger(), "Received empty cloud.");
+        if (cloud_raw->empty()) {
+            RCLCPP_WARN(get_logger(), "Empty cloud.");
             return;
         }
 
         CloudT::Ptr cloud_curr = preprocessScan(cloud_raw);
-        if (cloud_curr->empty())
-        {
-            RCLCPP_WARN(get_logger(), "Cloud empty after preprocessing.");
+        if (cloud_curr->empty()) {
+            RCLCPP_WARN(get_logger(), "Cloud empty after preprocess.");
             return;
         }
 
+        double current_time = rclcpp::Time(msg->header.stamp).seconds();
         rclcpp::Time stamp(msg->header.stamp);
 
-        // 2. 第一帧处理
-        if (!has_map_)
-        {
+        // 2. 第一帧初始化
+        if (!has_map_) {
             T_map_lidar_ = Eigen::Matrix4f::Identity();
             CloudT::Ptr cloud_first_in_map(new CloudT);
             pcl::transformPointCloud(*cloud_curr, *cloud_first_in_map, T_map_lidar_);
-
             addCloudToMap(cloud_first_in_map);
-
             has_map_ = true;
             used_frame_count_ = 1;
-            has_previous_pose_ = false;   // 第一帧没有速度信息
+            has_previous_pose_ = false;
+            has_last_cloud_time_ = true;
+            last_cloud_time_ = current_time;
 
             publishCloud(map_cloud_, stamp, map_pub_);
             publishCloud(cloud_first_in_map, stamp, registered_scan_pub_);
-
             pcl::io::savePCDFileBinary(save_dir_ + "/scan_to_map_map.pcd", *map_cloud_);
 
-            RCLCPP_INFO(
-                get_logger(),
-                "First frame inserted. raw: %zu, down: %zu, map: %zu",
-                cloud_raw->size(),
-                cloud_curr->size(),
-                map_cloud_->size()
-            );
+            RCLCPP_INFO(get_logger(), "First frame inserted. raw: %zu, down: %zu",
+                        cloud_raw->size(), cloud_curr->size());
             return;
         }
 
-        // 3. 预测位姿（初值）
-        Eigen::Matrix4f T_predict = predictPose();
+        // 3. 位姿预测（IMU 优先）
+        Eigen::Matrix4f T_predict = predictPose(current_time);
 
         // 4. 提取局部地图
         CloudT::Ptr local_map = getLocalMap(T_predict);
-        if (static_cast<int>(local_map->size()) < min_target_points_)
-        {
-            RCLCPP_WARN(get_logger(), "Target map too small. Skip frame.");
+        if (static_cast<int>(local_map->size()) < min_target_points_) {
+            RCLCPP_WARN(get_logger(), "Target map too small. Skip.");
             return;
         }
 
-        // 5. Scan-to-Map ICP
+        // 5. ICP 配准
         pcl::IterativeClosestPoint<PointT, PointT> icp;
         icp.setInputSource(cloud_curr);
         icp.setInputTarget(local_map);
@@ -346,103 +382,85 @@ private:
         CloudT::Ptr cloud_curr_in_map(new CloudT);
         icp.align(*cloud_curr_in_map, T_predict);
 
-        if (!icp.hasConverged())
-        {
-            RCLCPP_WARN(get_logger(), "ICP did not converge. Skip frame.");
+        if (!icp.hasConverged()) {
+            RCLCPP_WARN(get_logger(), "ICP did not converge. Skip.");
             return;
         }
 
         double score = icp.getFitnessScore();
-        if (score > max_fitness_score_)
-        {
-            RCLCPP_WARN(
-                get_logger(),
-                "ICP score too high: %.6f > %.6f. Skip frame.",
-                score,
-                max_fitness_score_
-            );
+        if (score > max_fitness_score_) {
+            RCLCPP_WARN(get_logger(), "ICP score too high: %.6f > %.6f. Skip.",
+                        score, max_fitness_score_);
             return;
         }
 
-        // 6. 更新位姿（直接使用 ICP 结果）
-        last_T_ = T_map_lidar_;                         // 保存上一帧位姿
-        T_map_lidar_ = icp.getFinalTransformation();    // 当前帧位姿
+        // 6. 校验变换合理性，防止跳变
+        Eigen::Matrix4f T_new = icp.getFinalTransformation();
+        Eigen::Matrix4f delta = T_map_lidar_.inverse() * T_new;
+        float dx = delta(0,3), dy = delta(1,3), dz = delta(2,3);
+        float dyaw = std::atan2(delta(1,0), delta(0,0));
+        if (std::abs(dx) > 3.0 || std::abs(dy) > 3.0 || std::abs(dz) > 2.0 || std::abs(dyaw) > 0.5) {
+            RCLCPP_WARN(get_logger(), "Abnormal transform detected (dx=%.2f dy=%.2f dyaw=%.3f). Skip.",
+                        dx, dy, dyaw);
+            return;
+        }
+
+        // 7. 更新状态
+        last_T_ = T_map_lidar_;
+        T_map_lidar_ = T_new;
         has_previous_pose_ = true;
+        has_last_cloud_time_ = true;
+        last_cloud_time_ = current_time;
 
-        // 注意：cloud_curr_in_map 已经是 ICP 变换后的点云（在 map 坐标系下）
-        // 不需要再手动变换，直接使用即可
-
-        // 7. 更新地图（增量）
+        // cloud_curr_in_map 已是 ICP 变换后的点云（在 map 下）
         addCloudToMap(cloud_curr_in_map);
-
         used_frame_count_++;
 
         // 8. 发布
-        if (publish_every_n_ <= 1 || used_frame_count_ % publish_every_n_ == 0)
-        {
+        if (publish_every_n_ <= 1 || used_frame_count_ % publish_every_n_ == 0) {
             publishCloud(map_cloud_, stamp, map_pub_);
             publishCloud(cloud_curr_in_map, stamp, registered_scan_pub_);
         }
 
-        // 9. 定期保存
-        // if (save_every_n_ > 0 && used_frame_count_ % save_every_n_ == 0)
-        // {
-        //     pcl::io::savePCDFileBinary(save_dir_ + "/scan_to_map_map.pcd", *map_cloud_);
-        //     RCLCPP_INFO(get_logger(), "Saved map to %s", (save_dir_ + "/scan_to_map_map.pcd").c_str());
-        // }
+        // 9. 保存
+        if (save_every_n_ > 0 && used_frame_count_ % save_every_n_ == 0) {
+            pcl::io::savePCDFileBinary(save_dir_ + "/scan_to_map_map.pcd", *map_cloud_);
+            RCLCPP_INFO(get_logger(), "Map saved.");
+        }
 
         printPose(score);
 
         auto t_end = std::chrono::steady_clock::now();
-        double cost_ms =
-            std::chrono::duration<double, std::milli>(t_end - t_begin).count();
-        RCLCPP_INFO_THROTTLE(
-            get_logger(),
-            *get_clock(),
-            1000,
-            "Scan-to-map processing cost: %.2f ms",
-            cost_ms
-        );
+        double cost_ms = std::chrono::duration<double, std::milli>(t_end - t_begin).count();
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+                             "Cost: %.2f ms", cost_ms);
     }
 
 private:
     // 参数
-    std::string input_topic_;
-    std::string map_topic_;
-    std::string registered_scan_topic_;
-    std::string map_frame_;
-    std::string save_dir_;
-
-    double scan_leaf_size_;
-    double map_leaf_size_;
-    double local_map_radius_;
-
-    double max_corr_dist_;
-    int max_iter_;
-    double trans_eps_;
-    double fitness_eps_;
-    double max_fitness_score_;
-
-    int process_every_n_;
-    int publish_every_n_;
-    int save_every_n_;
-    int min_target_points_;
+    std::string input_topic_, imu_topic_, map_topic_, registered_scan_topic_, map_frame_, save_dir_;
+    double scan_leaf_size_, map_leaf_size_, local_map_radius_;
+    double max_corr_dist_, trans_eps_, fitness_eps_, max_fitness_score_;
+    int max_iter_, process_every_n_, publish_every_n_, save_every_n_, min_target_points_;
     int max_map_points_;
-    bool enable_constant_velocity_;
+    bool enable_constant_velocity_fallback_;
+    double imu_timeout_;
 
     // 状态
-    int frame_count_ = 0;
-    int used_frame_count_ = 0;
+    int frame_count_ = 0, used_frame_count_ = 0;
     bool has_map_ = false;
     bool has_previous_pose_ = false;
+    bool has_last_cloud_time_ = false;
+    double last_cloud_time_ = 0.0;
 
-    Eigen::Matrix4f T_map_lidar_;   // 当前帧在 map 下的位姿
-    Eigen::Matrix4f last_T_;        // 上一帧位姿（用于速度预测）
+    Eigen::Matrix4f T_map_lidar_;
+    Eigen::Matrix4f last_T_;
 
     CloudT::Ptr map_cloud_;
 
     // ROS 通信
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr map_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr registered_scan_pub_;
 };
