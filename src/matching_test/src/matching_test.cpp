@@ -51,14 +51,16 @@ public:
 
         std::filesystem::create_directories(save_dir_);
 
+        auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
+
         sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             input_topic_, 
-            rclcpp::SensorDataQoS(),
+            qos,
             std::bind(&MatchingNode::cloudCallback, this, std::placeholders::_1)
         );
         pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             output_topic_,
-            rclcpp::SensorDataQoS()
+            qos
         );
 
         last_cloud_ = std::make_shared<CloudT>();
