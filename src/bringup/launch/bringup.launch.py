@@ -44,9 +44,19 @@ def generate_launch_description():
         output='screen'
     )
 
+    real_trans_node = Node(
+        package='real_trans',
+        executable='real_trans',
+        parameters=[
+            {'use_sim_time': True},
+        ],
+        output='screen'
+    )
+
     return LaunchDescription([
         bridge_node,
         TF_node,
         static_node,
         deskew_node,
+        real_trans_node,
     ])

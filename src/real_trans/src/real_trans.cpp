@@ -113,7 +113,7 @@ void RealTrans::cloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg
     );
 
     *global_map_ += *cloud_map;
-    downsampleGlobalMap();
+    //downsampleGlobalMap();
     publishMap(msg->header.stamp);
 }
 

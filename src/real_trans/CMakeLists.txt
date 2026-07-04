@@ -13,6 +13,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(nav_msgs REQUIRED)
 
 add_executable(real_trans src/real_trans.cpp)
 ament_target_dependencies(real_trans
@@ -24,9 +25,21 @@ ament_target_dependencies(real_trans
   pcl_conversions
 )
 
-target_link_libraries(real_trans ${PCL_LIBRARIES} Eigen3::Eigen)
+add_executable(voxel_map src/voxel_map.cpp)
+ament_target_dependencies(voxel_map
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  pcl_conversions
+  nav_msgs
+)
 
-install(TARGETS real_trans DESTINATION lib/${PROJECT_NAME})
+target_link_libraries(real_trans ${PCL_LIBRARIES} Eigen3::Eigen)
+target_link_libraries(voxel_map ${PCL_LIBRARIES} Eigen3::Eigen)
+
+install(TARGETS real_trans voxel_map DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
