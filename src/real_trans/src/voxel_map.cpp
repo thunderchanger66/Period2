@@ -178,9 +178,12 @@ void VoxelMapNode::publishVoxelCloud(const rclcpp::Time& stamp) {
         pcl::PointXYZI p;
 
         // 使用体素中心作为代表点
-        p.x = static_cast<float>((key.ix + 0.5) * voxel_size_);
-        p.y = static_cast<float>((key.iy + 0.5) * voxel_size_);
-        p.z = static_cast<float>((key.iz + 0.5) * voxel_size_);
+        // p.x = static_cast<float>((key.ix + 0.5) * voxel_size_);
+        // p.y = static_cast<float>((key.iy + 0.5) * voxel_size_);
+        // p.z = static_cast<float>((key.iz + 0.5) * voxel_size_);
+        p.x = static_cast<float>(data.sum.x() / data.count);
+        p.y = static_cast<float>(data.sum.y() / data.count);
+        p.z = static_cast<float>(data.sum.z() / data.count);
 
         // intensity 表示这个体素里的点数
         p.intensity = static_cast<float>(data.count);

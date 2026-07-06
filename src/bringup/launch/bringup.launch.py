@@ -53,10 +53,20 @@ def generate_launch_description():
         output='screen'
     )
 
+    voxel_node = Node(
+        package='real_trans',
+        executable='voxel_map',
+        parameters=[
+            {'use_sim_time': True},
+        ],
+        output='screen'
+    )
+
     return LaunchDescription([
         bridge_node,
         TF_node,
         static_node,
         deskew_node,
         real_trans_node,
+        voxel_node,
     ])
