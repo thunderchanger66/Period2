@@ -36,10 +36,22 @@ ament_target_dependencies(voxel_map
   nav_msgs
 )
 
+add_executable(kd_tree src/kd_tree.cpp)
+ament_target_dependencies(kd_tree
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  pcl_conversions
+  nav_msgs
+)
+
 target_link_libraries(real_trans ${PCL_LIBRARIES} Eigen3::Eigen)
 target_link_libraries(voxel_map ${PCL_LIBRARIES} Eigen3::Eigen)
+target_link_libraries(kd_tree ${PCL_LIBRARIES} Eigen3::Eigen)
 
-install(TARGETS real_trans voxel_map DESTINATION lib/${PROJECT_NAME})
+install(TARGETS real_trans voxel_map kd_tree DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
