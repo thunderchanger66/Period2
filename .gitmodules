@@ -1,0 +1,3 @@
+[submodule "src/real_trans/third_party/ikd-Tree"]
+    path = src/real_trans/third_party/ikd-Tree
+    url = https://github.com/hku-mars/ikd-Tree.git
