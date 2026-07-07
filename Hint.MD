@@ -1,5 +1,5 @@
 # 启动官方传感器示例
-- gz sim ~/study/sensor/sensor_tutorial.sdf
+- gz sim ~/study/imu_ws/sim/sensor_tutorial.sdf
 
 # 官方小车运动示例
 - ~/study/sensor/sensor_launch.sh
