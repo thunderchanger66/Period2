@@ -63,6 +63,17 @@ ament_target_dependencies(ikd_tree
   nav_msgs
 )
 
+add_executable(crop_box src/crop_box.cpp)
+ament_target_dependencies(crop_box
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  pcl_conversions
+  nav_msgs
+)
+
 target_link_libraries(real_trans ${PCL_LIBRARIES} Eigen3::Eigen)
 target_link_libraries(voxel_map ${PCL_LIBRARIES} Eigen3::Eigen)
 target_link_libraries(kd_tree ${PCL_LIBRARIES} Eigen3::Eigen)
@@ -78,7 +89,9 @@ target_link_libraries(ikd_tree
   Threads::Threads
 )
 
-install(TARGETS real_trans voxel_map kd_tree ikd_tree DESTINATION lib/${PROJECT_NAME})
+target_link_libraries(crop_box ${PCL_LIBRARIES} Eigen3::Eigen)
+
+install(TARGETS real_trans voxel_map kd_tree ikd_tree crop_box DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
