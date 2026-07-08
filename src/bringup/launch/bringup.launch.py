@@ -62,6 +62,15 @@ def generate_launch_description():
         output='screen'
     )
 
+    crop_node = Node(
+        package='real_trans',
+        executable='crop_box',
+        parameters=[
+            {'use_sim_time': True},
+        ],
+        output='screen'
+    )
+
     return LaunchDescription([
         bridge_node,
         TF_node,
@@ -69,4 +78,5 @@ def generate_launch_description():
         deskew_node,
         real_trans_node,
         voxel_node,
+        crop_node,
     ])

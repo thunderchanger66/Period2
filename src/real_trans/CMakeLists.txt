@@ -74,6 +74,17 @@ ament_target_dependencies(crop_box
   nav_msgs
 )
 
+add_executable(scan_map src/scan_map.cpp)
+ament_target_dependencies(scan_map
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  pcl_conversions
+  nav_msgs
+)
+
 target_link_libraries(real_trans ${PCL_LIBRARIES} Eigen3::Eigen)
 target_link_libraries(voxel_map ${PCL_LIBRARIES} Eigen3::Eigen)
 target_link_libraries(kd_tree ${PCL_LIBRARIES} Eigen3::Eigen)
@@ -90,8 +101,9 @@ target_link_libraries(ikd_tree
 )
 
 target_link_libraries(crop_box ${PCL_LIBRARIES} Eigen3::Eigen)
+target_link_libraries(scan_map ${PCL_LIBRARIES} Eigen3::Eigen)
 
-install(TARGETS real_trans voxel_map kd_tree ikd_tree crop_box DESTINATION lib/${PROJECT_NAME})
+install(TARGETS real_trans voxel_map kd_tree ikd_tree crop_box scan_map DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
