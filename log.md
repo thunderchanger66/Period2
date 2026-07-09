@@ -103,3 +103,7 @@ $$T^{world}_{lidar}$$
 
 平移误差：$e_t=t_{est}-t_{gt}$  
 旋转误差：$R_{err}=\|R^T_{gt}R_{est}\|$ $e_R=\cos^{-1}(\frac{trace(R_err)-1}{2})$
+
+---
+
+# 流形
