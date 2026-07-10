@@ -106,4 +106,39 @@ $$T^{world}_{lidar}$$
 
 ---
 
+# FAST-LIO
 # 流形
+局部具有欧几里德空间性质的空间：一个不能直接用平直坐标系全局描述，但可以在每个局部小范围用平直坐标系描述的空间
+## 定义运算符
+![operator](images/operator.png "operator")
+## 局部同胚
+![l_h](images/locally_homeomorphic.png "locally homeomorphic")
+把空间切开，看极其微小一块时，可以无条件互相拉伸、扭曲、揉捏，只要不撕裂、不粘连，就能完全变成对方
+
+- 广义加：对应使用指数映射，在x处添加小扰动u，在李群上做乘法
+- 广义减：对应使用对数映射，确定这个扰动u
+
+位姿放在流形$SE(3)$**李群**上，只能乘求逆不能加减；协方差(P、误差$\delta{x}$)全部放在流形局部的切空间里，也就是**李代数**空间$se(3)$，可以做线性的加减乘除求导
+
+---
+
+# Continuous and Discrete model
+测量值=真值+零偏+噪声
+![c_m](images/continuous_model.png "continuous model")
+通过定义的新运算，可以进行离散状态更新
+![d_m](images/discrete_model.png "discreate model")
+
+---
+
+# 状态估计
+- $x$表示真值
+- $\bar{x}$表示滤波算法结束后得到的最优估计
+- $\hat{x}$表示滤波算法过程中得到的估计值
+- $\tilde{x}$表示误差
+
+有误差定义：
+![error](images/error.png "error")
+根据广义减运算，可得：$\delta\mathbf{\theta}^T=Log({}^G\mathbf{\bar{R}}^T_I{}^G\mathbf{R}_I)$，其他都是在欧式空间，能够直接相减
+## 前向传播
+1. 通过IMU积分与离散状态更新持续计算一个状态量，用于后续的反向传播来补偿运动失真
+2. 传播误差量，并计算对应的协方差矩阵
