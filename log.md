@@ -141,4 +141,15 @@ $$T^{world}_{lidar}$$
 根据广义减运算，可得：$\delta\mathbf{\theta}^T=Log({}^G\mathbf{\bar{R}}^T_I{}^G\mathbf{R}_I)$，其他都是在欧式空间，能够直接相减
 ## 前向传播
 1. 通过IMU积分与离散状态更新持续计算一个状态量，用于后续的反向传播来补偿运动失真
-2. 传播误差量，并计算对应的协方差矩阵
+![s_t](images/state_trans.png "state_trans")
+2. 传播误差量，并计算对应的协方差矩阵，使用误差状态卡尔曼滤波器（ESKF）
+
+![ESKF](images/ESKF.png "ESKF")
+![e_d](images/error_dynamics.png "error_dynamics")
+![cown](images/covariance_of_white_noises.png "covariance_of_white_noises")
+## 反向传播
+![propagation](images/propagation.png "propagation")  
+把点${}^{L_j}p_{f_j}$投影到扫描结束时间$t_k$
+
+![back_propagation](images/backward_propagation.png "back_propagation")
+## 残差计算
